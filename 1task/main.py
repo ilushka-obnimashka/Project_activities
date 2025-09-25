@@ -2,31 +2,185 @@ import gradio as gr
 from transformers import AutoTokenizer, AutoModelForTokenClassification, pipeline
 
 
+def load_hf_tokenizer(tokenizer_name: str, **kwargs):
+    """
+    Load tokenizer from Hugging Face Hub with error handling.
+
+    Args:
+        tokenizer_name: Name of the tokenizer on Hugging Face Hub
+                       (e.g., 'dslim/bert-large-NER')
+        **kwargs: Additional arguments for `AutoTokenizer.from_pretrained()`
+
+        Returns:
+            AutoTokenizer instance if successful, None otherwise
+
+    See also:
+        `transformers.AutoTokenizer.from_pretrained()`
+    Examples:
+    ```python
+        >>> tokenizer = AutoTokenizer.from_pretrained("./test/bert_saved_model/")
+        >>> print(tokenizer)
+    ```"""
+    try:
+        return AutoTokenizer.from_pretrained(tokenizer_name, **kwargs)
+    except ValueError as e:
+        print(e)
+        return None
+    except Exception as e:
+        print(e)
+        return None
+
+
+def load_hf_model(model_name: str, **kwargs):
+    """
+    Load model from Hugging Face Hub with error handling.
+
+    Args:
+        model_name: Name of the model on Hugging Face Hub
+                       (e.g., 'dslim/bert-large-NER')
+        **kwargs: Additional arguments for `AutoModelForTokenClassification.from_pretrained()`
+
+        Returns:
+            AutoModelForTokenClassification instance if successful, None otherwise
+
+    See also:
+        `transformers.AutoTokenizer.from_pretrained()`
+    Examples:
+    ```python
+        >>> model = AutoModelForTokenClassification.from_pretrained("dslim/bert-large-NER")
+        >>> print(model)
+    ```"""
+    try:
+        return AutoModelForTokenClassification.from_pretrained(model_name, **kwargs)
+    except ValueError as e:
+        print(e)
+        return None
+    except Exception as e:
+        print(e)
+        return None
+
+
+def get_pipeline(task: str, **kwargs):
+    """Return pipeline from Hugging Face Hub with error handling.
+
+    Args:
+        task : The task defining which pipeline will be returned. See 'transformers.pipeline()' for more details
+        **kwargs: Additional arguments for 'transformers.pipeline()'
+    See also:
+        'transformers.pipeline()'
+
+    Examples:
+    ```python
+        >>> ner_pipeline = get_pipeline("ner", model, tokenizer)
+    ```"""
+    try:
+        return pipeline(task, **kwargs)
+    except Exception as e:
+        print(e)
+        return None
+
+
+def process_text(tokenizer, pipeline, text, max_length=512, stride=8):
+    """
+    Processing text with Transformers.pipeline() using tokenizer offsets (text of any length can be processed).
+    Args:
+        tokenizer: The tokenizer on Hugging Face Hub
+        pipeline: The pipeline on Hugging Face Hub
+        text: The text to be processed
+        max_length: Maximum chunk length (in tokens) that the model can process in one pass
+        stride: Overlap size between consecutive text chunks
+
+    See also:
+        'transformers.pipeline()'
+    """
+    try:
+        inputs = tokenizer(text, return_tensors='pt', truncation=False,
+                           add_special_tokens=False, return_offsets_mapping=True)
+
+        tokens = inputs['input_ids'][0]
+        offsets = inputs['offset_mapping'][0]
+
+        all_entities = []
+        seen_entities = set()
+
+        for i in range(0, len(tokens), max_length - stride):
+            chunk_offsets = offsets[i:i + max_length]
+
+            chunk_start = chunk_offsets[0][0].item() if len(chunk_offsets) > 0 else 0
+            chunk_end = chunk_offsets[-1][1].item() if len(chunk_offsets) > 0 else len(text)
+
+            chunk_text = text[chunk_start:chunk_end]
+
+            if not chunk_text.strip():
+                continue
+
+            chunk_entities = pipeline(chunk_text)
+
+            for entity in chunk_entities:
+                entity_start = entity['start'] + chunk_start
+                entity_end = entity['end'] + chunk_start
+
+                if entity_end > len(text):
+                    continue
+
+                entity_word = text[entity_start:entity_end]
+                entity_key = (entity_word.lower(), entity_start, entity_end)
+
+                if entity_key not in seen_entities:
+                    seen_entities.add(entity_key)
+                    entity.update({
+                        'start': entity_start,
+                        'end': entity_end,
+                        'word': entity_word
+                    })
+                    all_entities.append(entity)
+            continue
+    except Exception as e:
+        print(f"Error processing chunk: {e}")
+
+    return {"text": text, "entities": all_entities}
+
+
 def main():
-    tokenizer = AutoTokenizer.from_pretrained("dslim/bert-large-NER")
-    model = AutoModelForTokenClassification.from_pretrained("dslim/bert-large-NER")
-    ner_pipeline = pipeline("ner", model=model, tokenizer=tokenizer, aggregation_strategy="simple")
+    try:
+        tokenizer = load_hf_tokenizer("dslim/bert-large-NER")
+        if tokenizer is None:
+            print("Failed to load tokenizer")
+            return -1
 
-    def process_txt(txt: str) -> dict[str, str | list[str]]:
-        return {"text": txt, "entities": ner_pipeline(txt)}
+        model = load_hf_model("dslim/bert-large-NER")  # Исправил вызов вашей функции
+        if model is None:
+            print("Failed to load model")
+            return -1
 
-    examples = [
-        "Anna has never seen such self-documenting code from an NSU student.",
-        "Messenger Max wants to buy Ilya Trushkin's ACMS Censor for a lot of money.",
-        "I wonder if they will notice what I wrote here?"
-    ]
+        ner_pipeline = get_pipeline("ner", model=model, tokenizer=tokenizer, aggregation_strategy="simple")
+        if ner_pipeline is None:
+            print("Failed to create pipeline")
+            return -1
 
-    demo = gr.Interface(
-        fn=process_txt,
-        inputs=gr.Textbox(placeholder="Enter a sentence here...", label="Text", lines=3),
-        outputs=gr.HighlightedText(label="processed text", show_legend=True),
-        title="Project activities. GenAI-1-43(Named Entity Recognition)",
-        examples=examples,
-        flagging_mode="never",
-        theme="soft"
-    )
+        examples = [
+            "Anna has never seen such self-documenting code from an NSU student.",
+            "Messenger Max wants to buy Ilya Trushkin's ACMS Censor for a lot of money.",
+            "I wonder if they will notice what I wrote here?"
+        ]
 
-    demo.launch()
+        demo = gr.Interface(
+            fn=lambda txt: process_text(tokenizer, ner_pipeline, txt),
+            inputs=gr.Textbox(placeholder="Enter a sentence here...", label="Text", lines=3),
+            outputs=gr.HighlightedText(label="processed text"),
+            title="Project activities. GenAI-1-43(Named Entity Recognition)",
+            examples=examples,
+            flagging_mode="never",
+            theme="soft"
+        )
+
+        demo.launch()
+
+        return 0
+
+    except KeyboardInterrupt:
+        print("\nProgram terminated by user")
+        return 0
 
 
 if __name__ == '__main__':

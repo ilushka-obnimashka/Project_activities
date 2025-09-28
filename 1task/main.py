@@ -2,64 +2,6 @@ import gradio as gr
 from transformers import AutoTokenizer, AutoModelForTokenClassification, pipeline
 
 
-def load_hf_tokenizer(tokenizer_name: str, **kwargs):
-    """
-    Load tokenizer from Hugging Face Hub with error handling.
-
-    Args:
-        tokenizer_name: Name of the tokenizer on Hugging Face Hub
-                       (e.g., 'dslim/bert-large-NER')
-        **kwargs: Additional arguments for `AutoTokenizer.from_pretrained()`
-
-        Returns:
-            AutoTokenizer instance if successful, None otherwise
-
-    See also:
-        `transformers.AutoTokenizer.from_pretrained()`
-    Examples:
-    ```python
-        >>> tokenizer = AutoTokenizer.from_pretrained("./test/bert_saved_model/")
-        >>> print(tokenizer)
-    ```"""
-    try:
-        return AutoTokenizer.from_pretrained(tokenizer_name, **kwargs)
-    except ValueError as e:
-        print(e)
-        return None
-    except Exception as e:
-        print(e)
-        return None
-
-
-def load_hf_model(model_name: str, **kwargs):
-    """
-    Load model from Hugging Face Hub with error handling.
-
-    Args:
-        model_name: Name of the model on Hugging Face Hub
-                       (e.g., 'dslim/bert-large-NER')
-        **kwargs: Additional arguments for `AutoModelForTokenClassification.from_pretrained()`
-
-        Returns:
-            AutoModelForTokenClassification instance if successful, None otherwise
-
-    See also:
-        `transformers.AutoTokenizer.from_pretrained()`
-    Examples:
-    ```python
-        >>> model = AutoModelForTokenClassification.from_pretrained("dslim/bert-large-NER")
-        >>> print(model)
-    ```"""
-    try:
-        return AutoModelForTokenClassification.from_pretrained(model_name, **kwargs)
-    except ValueError as e:
-        print(e)
-        return None
-    except Exception as e:
-        print(e)
-        return None
-
-
 def get_pipeline(task: str, **kwargs):
     """Return pipeline from Hugging Face Hub with error handling.
 
@@ -71,7 +13,7 @@ def get_pipeline(task: str, **kwargs):
 
     Examples:
     ```python
-        >>> ner_pipeline = get_pipeline("ner", model, tokenizer)
+        >>> ner_pipeline = get_pipeline("ner", model = model)
     ```"""
     try:
         return pipeline(task, **kwargs)
@@ -143,17 +85,7 @@ def process_text(tokenizer, pipeline, text, max_length=512, stride=8):
 
 def main():
     try:
-        tokenizer = load_hf_tokenizer("dslim/bert-large-NER")
-        if tokenizer is None:
-            print("Failed to load tokenizer")
-            return -1
-
-        model = load_hf_model("dslim/bert-large-NER")  # Исправил вызов вашей функции
-        if model is None:
-            print("Failed to load model")
-            return -1
-
-        ner_pipeline = get_pipeline("ner", model=model, tokenizer=tokenizer, aggregation_strategy="simple")
+        ner_pipeline = get_pipeline("ner", model="dslim/bert-large-NER",aggregation_strategy="simple")
         if ner_pipeline is None:
             print("Failed to create pipeline")
             return -1
@@ -165,7 +97,7 @@ def main():
         ]
 
         demo = gr.Interface(
-            fn=lambda txt: process_text(tokenizer, ner_pipeline, txt),
+            fn=lambda txt: process_text(ner_pipeline.tokenizer, ner_pipeline, txt),
             inputs=gr.Textbox(placeholder="Enter a sentence here...", label="Text", lines=3),
             outputs=gr.HighlightedText(label="processed text"),
             title="Project activities. GenAI-1-43(Named Entity Recognition)",

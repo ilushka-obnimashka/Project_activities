@@ -1,5 +1,5 @@
 import gradio as gr
-from transformers import AutoTokenizer, AutoModelForTokenClassification, pipeline
+from transformers import pipeline
 
 
 def get_pipeline(task: str, **kwargs):
@@ -85,7 +85,7 @@ def process_text(tokenizer, pipeline, text, max_length=512, stride=8):
 
 def main():
     try:
-        ner_pipeline = get_pipeline("ner", model="dslim/bert-large-NER",aggregation_strategy="simple")
+        ner_pipeline = get_pipeline("ner", model="dslim/bert-large-NER", aggregation_strategy="simple")
         if ner_pipeline is None:
             print("Failed to create pipeline")
             return -1

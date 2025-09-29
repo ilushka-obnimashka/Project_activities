@@ -42,7 +42,7 @@ def get_pipeline(task: str, **kwargs):
         return -1
 
 
-def validate_max_length(max_length : int, pipeline : Pipeline) -> int:
+def _validate_max_length(max_length : int, pipeline : Pipeline) -> int:
     """Validate max_length parameters for text processing."""
     if max_length is None or max_length <= 0:
         length_limit = pipeline.model.config.max_position_embeddings
@@ -55,7 +55,7 @@ def validate_max_length(max_length : int, pipeline : Pipeline) -> int:
     return max_length
 
 
-def validate_overlap(overlap : int, max_length : int) -> int:
+def _validate_overlap(overlap : int, max_length : int) -> int:
     """Validate overlap parameters for text processing."""
     if overlap < 0:
         safe_overlap = min(8, max_length - 1)
@@ -81,8 +81,8 @@ def process_text(tokenizer, pipeline, text, max_length=512, overlap=8):
     See also:
         'transformers.pipeline()'
     """
-    max_length = validate_max_length(max_length, pipeline)
-    overlap = validate_overlap(overlap, max_length)
+    max_length = _validate_max_length(max_length, pipeline)
+    overlap = _validate_overlap(overlap, max_length)
     try:
         inputs = tokenizer(text, return_tensors='pt', truncation=False,
                            add_special_tokens=False, return_offsets_mapping=True)

@@ -6,7 +6,6 @@ from typing import Union, Optional, Dict, Any, Callable
 import cv2
 import numpy as np
 
-# Глобальное значение для размера ядра, разделяемое между процессами
 FILTER_KERNEL_SIZE = mp.Value('i', 5)
 
 
@@ -73,7 +72,6 @@ def blur_worker(in_queue: mp.Queue, out_queue: mp.Queue, stop_event: mp.Event):
         with FILTER_KERNEL_SIZE.get_lock():
             current_kernel_size = FILTER_KERNEL_SIZE.value
 
-        # Убедимся, что размер ядра нечетный и >= 3
         if current_kernel_size < 3:
             current_kernel_size = 3
         elif current_kernel_size % 2 == 0:
@@ -86,15 +84,13 @@ def blur_worker(in_queue: mp.Queue, out_queue: mp.Queue, stop_event: mp.Event):
 def on_trackbar_change(value):
     """Функция обратного вызова для ползунка, обновляющая глобальный размер ядра."""
     global FILTER_KERNEL_SIZE
-    # Гарантируем, что значение нечетное и >= 3
     new_value = max(3, value)
     if new_value % 2 == 0:
         new_value += 1
     
     with FILTER_KERNEL_SIZE.get_lock():
         FILTER_KERNEL_SIZE.value = new_value
-    
-    # Обновляем позицию ползунка, если мы ее скорректировали
+
     cv2.setTrackbarPos("Kernel Size (Odd)", "Adaptive Noise Filtering (Press 'q' to exit)", new_value)
 
 
@@ -141,7 +137,6 @@ def put_frames_to_queue(input_source: Union[str, int],
                 noisy_frame = frame
 
             try:
-                # Помещаем в очередь с таймаутом, чтобы не блокироваться навечно, если очередь полна
                 queue.put((frame_idx, noisy_frame), timeout=0.5)
                 frame_idx += 1
             except queue.Full:
@@ -150,11 +145,8 @@ def put_frames_to_queue(input_source: Union[str, int],
                 continue
 
             if is_camera:
-                # В режиме камеры задержка не нужна, т.к. cap.read() блокирует
                 pass
             else:
-                # Для видеофайлов можно добавить небольшую задержку,
-                # чтобы не переполнять очередь слишком быстро
                 time.sleep(0.001) 
 
     except Exception as e:
@@ -162,7 +154,7 @@ def put_frames_to_queue(input_source: Union[str, int],
     finally:
         if cap is not None:
             cap.release()
-        stop_event.set() # Сигнализируем всем, что продюсер закончил
+        stop_event.set() 
         print("Producer process finished.")
 
 
@@ -187,8 +179,8 @@ class VideoProcessor:
         self.noise_params = noise_params if noise_params is not None else {}
 
         self.worker_func = worker_function
-        self.producer_func = producer_function # <-- ИЗМЕНЕНИЕ
-        self.num_workers = max(1, num_workers) # Гарантируем хотя бы 1 воркера
+        self.producer_func = producer_function
+        self.num_workers = max(1, num_workers)
 
         self.is_camera = input_path.isdigit()
         self.input_source = int(input_path) if self.is_camera else input_path
@@ -253,7 +245,7 @@ class VideoProcessor:
         producer_obj = mp.Process(
             target=self.producer_func, 
             args=(self.input_source, in_queue, self.is_camera, stop_event, self.noise_type, self.noise_params),
-            daemon=True # Делаем продюсера демоном
+            daemon=True
         )
         producer_obj.start()
 
@@ -266,22 +258,19 @@ class VideoProcessor:
         try:
             while not stop_event.is_set():
                 
-                # Проверяем, жив ли продюсер. Если нет, и очереди пусты, выходим.
                 if not producer_obj.is_alive() and in_queue.empty() and out_queue.empty() and not frame_buffer:
                     if not last_frame_processed:
                         print("Producer finished and all queues are empty.")
                         last_frame_processed = True
-                    # Даем небольшой таймаут, чтобы убедиться, что все воркеры точно закончили
+                  
                     time.sleep(0.1) 
                     if out_queue.empty() and not frame_buffer:
-                         break # Выходим из основного цикла
+                         break
 
                 try:
-                    # Пытаемся получить обработанный кадр из выходной очереди
                     frame_idx, processed_frame = out_queue.get(timeout=0.01)
                     frame_buffer[frame_idx] = processed_frame
                 except queue.Empty:
-                    # Если очередь пуста, просто продолжаем цикл
                     pass
                 except Exception as e:
                     if stop_event.is_set():
@@ -289,7 +278,6 @@ class VideoProcessor:
                     print(f"Error getting from out_queue: {e}")
                     continue
 
-                # Обрабатываем кадры из буфера в правильном порядке
                 while next_frame_idx in frame_buffer:
                     frame_to_display = frame_buffer.pop(next_frame_idx)
 
@@ -318,15 +306,14 @@ class VideoProcessor:
 
         finally:
             print("Starting cleanup...")
-            stop_event.set() # Устанавливаем событие остановки для всех процессов
+            stop_event.set() 
 
-            # Даем процессам время, чтобы завершиться штатно
             print("Joining producer process...")
             producer_obj.join(timeout=1.0) 
             if producer_obj.is_alive():
                 print("Producer process still alive, terminating...")
-                producer_obj.terminate() # Принудительно завершаем, если join не сработал
-                producer_obj.join() # Ждем завершения
+                producer_obj.terminate() 
+                producer_obj.join() 
                 print("Producer process terminated.")
 
             for idx, worker_obj in enumerate(self.workers_list):

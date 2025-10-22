@@ -36,7 +36,7 @@ def add_gaussian_noise(image: np.ndarray, mean: float = 0, sigma: float = 25) ->
     return noisy_image
 
 
-def worker(in_queue: mp.Queue, out_queue: mp.Queue, stop_event: mp.Event):
+def blur_worker(in_queue: mp.Queue, out_queue: mp.Queue, stop_event: mp.Event):
     """
     Рабочий процесс: берет ОРИГИНАЛЬНЫЙ и ЗАШУМЛЕННЫЙ кадры из входной очереди,
     применяет медианное размытие к ЗАШУМЛЕННОМУ и помещает ОРИГИНАЛЬНЫЙ
@@ -119,7 +119,7 @@ def put_frames_to_queue(input_source: Union[str, int],
                 )
             else:
                 noisy_frame = frame
-            queue.put((frame_idx, frame, noisy_frame))
+            queue.put((frame_idx, noisy_frame, noisy_frame))
             frame_idx += 1
 
             if not is_camera:
@@ -142,21 +142,24 @@ class VideoProcessor:
     Универсальный класс для обработки видеопотока с применением различных инструментов.
     Функция применимая к кадрам (воркер) задается при инициализации.
     Поддерживает многопоточность, реализованную при помощи Python Processing.
+    Транслирует оригнальное о обработанное (при помощи воркера) изображения.
     """
 
     def __init__(self, input_path: str,
                  output_path: str,
                  worker_function: Callable,
+                 producer_function : Callable,
                  num_workers: int = 1,
-                 noise_type: Optional[str] = None,
-                 noise_params: Optional[Dict[str, Any]] = None):
+                 worker_kwargs: Optional[Dict[str, Any]] = None,
+                 producer_kwargs: Optional[Dict[str, Any]] = None):
 
         self.input_path_str = input_path
         self.output_path = output_path
-        self.noise_type = noise_type
-        self.noise_params = noise_params if noise_params is not None else {}
+        self.worker_kwargs = worker_kwargs if worker_kwargs is not None else {}
+        self.producer_kwargs = producer_kwargs if producer_kwargs is not None else {}
 
         self.worker_func = worker_function
+        self.producer_func = producer_function
         self.num_workers = num_workers
 
         self.is_camera = input_path.isdigit()
@@ -215,14 +218,16 @@ class VideoProcessor:
         for _ in range(self.num_workers):
             worker_obj = mp.Process(
                 target=self.worker_func,
-                args=(in_queue, out_queue, stop_event)
+                args=(in_queue, out_queue, stop_event),
+                kwargs=self.worker_kwargs
             )
             worker_obj.start()
             self.workers_list.append(worker_obj)
 
         producer_obj = mp.Process(
-            target=put_frames_to_queue,
-            args=(self.input_source, in_queue, self.is_camera, stop_event, self.noise_type, self.noise_params)
+            target=self.producer_func,
+            args=(self.input_source, in_queue, self.is_camera, stop_event),
+            kwargs=self.producer_kwargs
         )
         producer_obj.start()
 

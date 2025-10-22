@@ -147,13 +147,11 @@ def put_frames_to_queue(input_source: Union[str, int],
 class NoiseFilterProcessor:
     def __init__(self, input_path: str, 
                  output_path: str, 
-                 num_workers: int, 
                  noise_type: Optional[str] = None, 
                  noise_params: Optional[Dict[str, Any]] = None):
         
         self.input_path_str = input_path
         self.output_path = output_path
-        self.num_workers = num_workers
         self.noise_type = noise_type
         self.noise_params = noise_params if noise_params is not None else {}
 

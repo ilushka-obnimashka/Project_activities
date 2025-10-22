@@ -1,72 +1,106 @@
 import multiprocessing as mp
 import queue
 import time
-from typing import Union
-
+from typing import Union, Optional, Dict, Any
 import cv2
+import numpy as np
 
 # Общая переменная памяти для размера ядра фильтра
 FILTER_KERNEL_SIZE = mp.Value('i', 5)
 
 
+def add_salt_and_pepper_noise(image: np.ndarray, salt_prob: float, pepper_prob: float) -> np.ndarray:
+    """Добавляет шум типа соль-перец на изображение. (Корректная версия)
+
+    Args:
+        image (np.ndarray): Исходное изображение (предполагается 8-битное).
+        salt_prob (float): Вероятность появления соли (белые пиксели).
+        pepper_prob (float): Вероятность появления перца (черные пиксели).
+
+    Returns:
+        np.ndarray: Зашумленное изображение.
+    """
+    noisy = np.copy(image)
+    height, width = image.shape[:2]
+    
+    num_salt = int(np.ceil(salt_prob * height * width))
+    coords_y_salt = np.random.randint(0, height, num_salt)
+    coords_x_salt = np.random.randint(0, width, num_salt)
+    noisy[coords_y_salt, coords_x_salt] = 255 # 255 для белого
+
+    num_pepper = int(np.ceil(pepper_prob * height * width))
+    coords_y_pepper = np.random.randint(0, height, num_pepper)
+    coords_x_pepper = np.random.randint(0, width, num_pepper)
+    noisy[coords_y_pepper, coords_x_pepper] = 0 # 0 для черного
+
+    return noisy
+
+
+def add_gaussian_noise(image: np.ndarray, mean: float = 0, sigma: float = 25) -> np.ndarray:
+    """Добавляет гауссовский шум на изображение. (Исправленная версия)
+
+    Args:
+        image (np.ndarray): Исходное изображение.
+        mean (float): Среднее значение шума.
+        sigma (float): Стандартное отклонение шума.
+
+    Returns:
+        np.ndarray: Зашумленное изображение.
+    """
+    noise = np.random.normal(mean, sigma, image.shape).astype('uint8')
+    noisy_image = cv2.add(image, noise)
+    return noisy_image
+
+
 def worker(in_queue: mp.Queue, out_queue: mp.Queue, stop_event: mp.Event):
     """
-    Рабочий процесс: берет кадры из входной очереди, применяет медианное размытие
-    и помещает обработанный кадр в выходную очередь.
+    Рабочий процесс: берет зашумленные кадры из входной очереди, применяет медианное размытие
+    (удаление шума) и помещает обработанный кадр в выходную очередь.
     """
     global FILTER_KERNEL_SIZE
 
     while not stop_event.is_set():
         try:
-            # Используем небольшой таймаут для проверки stop_event
             frame_idx, frame = in_queue.get(timeout=0.01)
         except queue.Empty:
             continue
         except Exception:
-            # Обработка потенциального неожиданного завершения доступа к очереди
             if stop_event.is_set():
                 break
             continue
 
-        # Получаем размер ядра из общей памяти
         with FILTER_KERNEL_SIZE.get_lock():
             current_kernel_size = FILTER_KERNEL_SIZE.value
-
-        # Убеждаемся, что размер ядра нечетный и не менее 3 для cv2.medianBlur
-        if current_kernel_size % 2 == 0:
-            current_kernel_size += 1
-        if current_kernel_size < 3:
-            current_kernel_size = 3
 
         processed_frame = cv2.medianBlur(frame, current_kernel_size)
         out_queue.put((frame_idx, processed_frame))
 
 
 def on_trackbar_change(value):
-     """Функция обратного вызова для ползунка, обновляющая глобальный размер ядра."""
-     global FILTER_KERNEL_SIZE
-
-     # Гарантируем, что значение не менее 3
-     new_value = max(3, value)
-
-     # Гарантируем, что значение нечетное
-     if new_value % 2 == 0:
-         new_value += 1
-
-     with FILTER_KERNEL_SIZE.get_lock():
-         FILTER_KERNEL_SIZE.value = new_value
+    """Функция обратного вызова для ползунка, обновляющая глобальный размер ядра."""
+    global FILTER_KERNEL_SIZE
+    new_value = max(3, value)
+    if new_value % 2 == 0:
+        new_value += 1
+    with FILTER_KERNEL_SIZE.get_lock():
+        FILTER_KERNEL_SIZE.value = new_value
 
 
-def put_frames_to_queue(input_source: Union[str, int], queue: mp.Queue, is_camera: bool, stop_event: mp.Event):
+def put_frames_to_queue(input_source: Union[str, int], 
+                        queue: mp.Queue, 
+                        is_camera: bool, 
+                        stop_event: mp.Event, 
+                        noise_type: Optional[str], 
+                        noise_params: Dict[str, Any]):
     """
-    Процесс-производитель: считывает кадры из видеоисточника и помещает их во входную очередь.
+    Процесс-производитель: считывает кадры,
+    ДОБАВЛЯЕТ ВЫБРАННЫЙ ШУМ и помещает их во входную очередь.
     """
     cap = None
     try:
         cap = cv2.VideoCapture(input_source)
         if not cap.isOpened():
-            # Вызываем правильный объект исключения
-            raise RuntimeError(f"Не удалось открыть источник: {input_source}")
+            raise RuntimeError(f"Failed to open source: {input_source}")
 
         if is_camera:
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
@@ -78,7 +112,22 @@ def put_frames_to_queue(input_source: Union[str, int], queue: mp.Queue, is_camer
             if not ret:
                 break
 
-            queue.put((frame_idx, frame))
+            if noise_type == 'salt_pepper':
+                noisy_frame = add_salt_and_pepper_noise(
+                    frame, 
+                    noise_params.get('salt_prob', 0.01), 
+                    noise_params.get('pepper_prob', 0.01)
+                )
+            elif noise_type == 'gaussian':
+                noisy_frame = add_gaussian_noise(
+                    frame, 
+                    noise_params.get('mean', 0), 
+                    noise_params.get('sigma', 25)
+                )
+            else:
+                noisy_frame = frame
+            
+            queue.put((frame_idx, noisy_frame))
             frame_idx += 1
 
             if is_camera:
@@ -87,19 +136,26 @@ def put_frames_to_queue(input_source: Union[str, int], queue: mp.Queue, is_camer
                     break
 
     except Exception as e:
-        print(f"Ошибка производителя на источнике {input_source}: {e}")
+        print(f"Producer error on source {input_source}: {e}")
         stop_event.set()
-        raise RuntimeError(f"Ошибка настройки источника {input_source}. Подробности: {e}")
     finally:
         if cap is not None:
             cap.release()
+        print("Producer process finished.")
 
 
-class NoizeFilterProcessor:
-    def __init__(self, input_path: str, output_path: str, num_workers: int):
+class NoiseFilterProcessor:
+    def __init__(self, input_path: str, 
+                 output_path: str, 
+                 num_workers: int, 
+                 noise_type: Optional[str] = None, 
+                 noise_params: Optional[Dict[str, Any]] = None):
+        
         self.input_path_str = input_path
         self.output_path = output_path
         self.num_workers = num_workers
+        self.noise_type = noise_type
+        self.noise_params = noise_params if noise_params is not None else {}
 
         self.is_camera = input_path.isdigit()
         self.input_source = int(input_path) if self.is_camera else input_path
@@ -108,101 +164,81 @@ class NoizeFilterProcessor:
         self.out = None
 
         try:
-            self.cap = cv2.VideoCapture(self.input_source)
-            if not self.cap.isOpened():
-                raise IOError(f"Не удалось открыть источник {input_path}")
+            temp_cap = cv2.VideoCapture(self.input_source)
+            if not temp_cap.isOpened():
+                raise IOError(f"Failed to open source {input_path}")
 
             if not self.is_camera:
-                width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                source_fps = self.cap.get(cv2.CAP_PROP_FPS)
+                width = int(temp_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                height = int(temp_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                source_fps = temp_cap.get(cv2.CAP_PROP_FPS)
 
                 if (source_fps < 1.0):
                     source_fps = 30.0
 
                 self.out = cv2.VideoWriter(self.output_path, cv2.VideoWriter_fourcc(*'mp4v'), source_fps,
                                            (width, height))
+            
+            temp_cap.release()
 
         except IOError as e:
             raise e
         except Exception as e:
-            # Исправлено: Вызываем правильный объект исключения
-            raise RuntimeError(f"Ошибка настройки источника {input_path}. Подробности: {e}")
+            raise RuntimeError(f"Error setting up source {input_path}. Details: {e}")
 
     def __del__(self):
-        """Очистка ресурсов при уничтожении объекта."""
-        if hasattr(self, 'cap') and self.cap is not None and self.cap.isOpened():
-            self.cap.release()
         if hasattr(self, 'out') and self.out is not None and self.out.isOpened():
             self.out.release()
         cv2.destroyAllWindows()
 
     def run(self):
-        WINDOW_NAME = "Адаптивная фильтрация шума (Нажмите 'q' для выхода)"
+        WINDOW_NAME = "Adaptive Noise Filtering (Press 'q' to exit)"
         cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
+        cv2.waitKey(100) 
+        time.sleep(0.5)
 
-        # УЛУЧШЕНИЕ: Используем цикл для более надежной инициализации окна.
-        # Это гарантирует, что окно полностью зарегистрировано перед созданием ползунка.
+        cv2.createTrackbar("Kernel Size (Odd)", WINDOW_NAME, 5, 21, on_trackbar_change)
 
-        time.sleep(1)
-
-        # ❌ УДАЛЕНА: Строка для создания ползунка. Окно теперь без трекбара.
-        # cv2.createTrackbar("Размер ядра (Нечетный)", WINDOW_NAME, 5, 21, on_trackbar_change)
-
-        in_queue = mp.Queue(maxsize=self.num_workers * 4)  # Ограниченный размер очереди
+        in_queue = mp.Queue(maxsize=self.num_workers * 4)
         out_queue = mp.Queue(maxsize=self.num_workers * 4)
         stop_event = mp.Event()
 
-        # 1. Запуск рабочих процессов
-        workers = []
-        for _ in range(self.num_workers):
-            worker_obj = mp.Process(target=worker, args=(in_queue, out_queue, stop_event))
-            worker_obj.start()
-            workers.append(worker_obj)
-
-        # 2. Запуск процесса-производителя
-        # Передаем правильные 4 аргумента
+        worker_obj = mp.Process(target=worker, args=(in_queue, out_queue, stop_event))
+        worker_obj.start()
+          
         producer_obj = mp.Process(
             target=put_frames_to_queue,
-            args=(self.input_source, in_queue, self.is_camera, stop_event)
+            args=(self.input_source, in_queue, self.is_camera, stop_event, self.noise_type, self.noise_params)
         )
         producer_obj.start()
 
         frame_buffer = {}
         next_frame_idx = 0
 
-        print("Начинаем обработку видео...")
+        print("Starting video processing...")
 
         try:
-            # Продолжаем, пока производитель активен И/ИЛИ в очередях/буфере есть данные
-            while producer_obj.is_alive() or not out_queue.empty() or frame_buffer:
-                # Получаем обработанные кадры из выходной очереди
+            while (producer_obj.is_alive() or not out_queue.empty() or frame_buffer):
                 try:
-                    # Используем небольшой таймаут для проверки условия выхода из основного цикла
                     frame_idx, processed_frame = out_queue.get(timeout=0.01)
                     frame_buffer[frame_idx] = processed_frame
                 except queue.Empty:
-                    # Если очереди пусты и производитель неактивен, выходим
-                    if not producer_obj.is_alive() and in_queue.empty() and out_queue.empty():
+                    if not producer_obj.is_alive() and in_queue.empty() and out_queue.empty() and not frame_buffer:
                         break
                     continue
                 except Exception:
-                    # Обрабатываем сбой доступа к очереди
                     if not producer_obj.is_alive():
                         break
                     continue
 
-                # Записываем и отображаем кадры по порядку
                 while next_frame_idx in frame_buffer:
-                    frame_to_display = frame_buffer.pop(next_frame_idx)  # Исправлено: Извлекаем кадр один раз
+                    frame_to_display = frame_buffer.pop(next_frame_idx)  
 
-                    # Записываем в файл только если это видео (не камера)
                     if self.out:
                         self.out.write(frame_to_display)
 
-                    cv2.imshow(WINDOW_NAME, frame_to_display)  # Используем извлеченный кадр
+                    cv2.imshow(WINDOW_NAME, frame_to_display)  
 
-                    # Здесь обработка событий GUI должна выполняться постоянно
                     key = cv2.waitKey(1)
                     if key & 0xFF == ord('q'):
                         stop_event.set()
@@ -210,22 +246,39 @@ class NoizeFilterProcessor:
 
                     next_frame_idx += 1
 
-                # Проверяем сигнал выхода после обработки буфера
                 if stop_event.is_set():
                     break
-
-            print("Обработка завершена.")
+            
+            print("Processing finished.")
 
         except KeyboardInterrupt:
-            print("Обработка прервана пользователем")
+            print("Processing interrupted by user")
+            stop_event.set()
 
         finally:
-            # Очистка всех процессов
+            print("Starting cleanup...")
             stop_event.set()
-            producer_obj.join()
-            for worker_obj in workers:
-                worker_obj.terminate()  # Используем terminate для более быстрой очистки
-                worker_obj.join(timeout=1)
+            
+            producer_obj.join(timeout=2)
+            if producer_obj.is_alive():
+                producer_obj.terminate()
+
+            worker_obj.join(timeout=2)
+            if worker_obj.is_alive():
+                worker_obj.terminate()
+
+            while not in_queue.empty():
+                try: in_queue.get_nowait()
+                except queue.Empty: break
+            while not out_queue.empty():
+                try: out_queue.get_nowait()
+                except queue.Empty: break
+            
+            if self.out:
+                self.out.release()
+                print(f"Video saved to {self.output_path}")
 
             cv2.destroyAllWindows()
-            print("Очистка завершена.")
+             print("Cleanup finished.")
+
+

@@ -2,7 +2,7 @@ import os
 
 import click
 
-from video_processor import VideoProcessor
+from video_processor import VideoProcessor, blur_worker, put_frames_to_queue
 
 
 @click.command()
@@ -14,7 +14,7 @@ from video_processor import VideoProcessor
 @click.option('--pepper', 'pepper_prob', type=float, default=0.02, help='Pepper probability (for salt_pepper noise).')
 @click.option('--mean', type=float, default=0, help='Mean (for gaussian noise).')
 @click.option('--sigma', type=float, default=25, help='Sigma (for gaussian noise).')
-def main(input_path, output_path, num_workers, noise_type, salt_prob, pepper_prob, mean, sigma):
+def main(input_path, num_workers, noise_type, salt_prob, pepper_prob, mean, sigma):
     noise_params = {}
     if noise_type == 'salt_pepper':
         noise_params = {'salt_prob': salt_prob, 'pepper_prob': pepper_prob}
@@ -38,7 +38,9 @@ def main(input_path, output_path, num_workers, noise_type, salt_prob, pepper_pro
             output_path=f"result_{os.path.basename(input_path)}",
             num_workers=num_workers,
             noise_type=noise_type,
-            noise_params=noise_params
+            noise_params=noise_params,
+	    worker_function = blur_worker,
+	    producer_function=put_frames_to_queue	
         )
 
         processor.run()
